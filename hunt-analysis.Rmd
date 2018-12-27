@@ -1,0 +1,254 @@
+---
+title: "hunt-analysis"
+author: "Aude Vuilliomenet"
+date: "12/27/2018"
+output: html_document
+---
+---
+title: "Wk7"
+output: html_document
+---
+
+```{r}
+library(tmap) 
+library(geojsonio)
+library(sp)
+library(rgdal)
+library(tidyverse)
+library(tmaptools)
+library(spatstat)
+```
+
+## R Markdown
+Question 1: How far did the group from last year travel? What is the distance of their path?
+
+Open the hunt path of last year using the geojson_read() function. Once the path is dowloanded, the type of of the geometry feature is checked. 
+
+```{r}
+hunt <- geojson_read("https://www.dropbox.com/s/wa2ip35tcmt93g3/Team7.geojson?raw=1", what = "sp")
+class(hunt)
+```
+
+The coordinate system for the spatial geometry is set to the British National Grid. And the path is ploted in interactive map.
+
+```{r}
+BNG <- "+init=epsg:27700"
+hunt <- spTransform(hunt, BNG)
+```
+Let's have a look at the path of last year!
+```{r}
+tmap_mode("view")
+tm_shape(hunt) +
+  tm_lines(col = "blue", lwd = 4)
+```
+
+As we would like to analyse the spatial geometry, the feature geometry is converted to a simple feature dataframe. The coordinates for the path are stored in a single list-column, call the geometry column. Our path is now a Spatiallines Dataframe and is a linestring as geometry types. 
+```{r}
+huntSF <- st_as_sf(hunt)
+class(huntSF)
+summary(huntSF)
+huntSF <- huntSF[,c("geometry")]
+attr(huntSF, "sf_column")
+hunt_SF_geom <- st_geometry(huntSF)
+hunt_SF_geom[1]
+```
+It is possible now to calculate the length of the path by using the st_length() function. As the coordinate system is set correctly, this give the result of the length of the hunt path of last year. Which was around 46.604 km. 
+```{r}
+st_is_valid(huntSF[1,])
+st_length(huntSF)
+```
+Question 2: How many TfL station did your route pass within 100 metres distance?
+
+First read the kml file with the tubestations. 
+```{r}
+tubestations <- sf::st_read("data/London stations.kml")
+tubestations_sf <- sf::st_sf(tubestations)
+tubestations_sf <- st_transform(tubestations_sf, BNG)
+```
+
+Here we would like to calculate the tube stations that we passed by. The stations are not further awy than 100m of our path. 
+There are two possibilites of solving this problem. The first is to make a buffer around the path of 100m, the second is to make a buffer around the tubestations. For both case, it is then possible to find all the tubestations that intersect with the path. 
+Here, the second method was chosen. With the function st_buffer(), a buffer of 100m distance for each tubestations was calculated. 
+```{r}
+tubestations_buff_100m <- st_buffer(tubestations_sf, dist = 100)
+View(tubestations_sf)
+```
+Here, we can have a quick look at the path and the tubestations buffer!
+```{r}
+tmap_mode("view")
+tm_shape(hunt) +
+  tm_lines(col = "green", lwd = 4)+
+  tm_shape(tubestations_buff_100m)+
+  tm_polygons(col = "blue")
+```
+Now, it is time to find the tubestations that intersect with the hunt path. Here again, there are two possibilites of doing this. Either the funciton st_intersection() or st_intersects() can be used. The first function will return a matrix with TRUE/FALSE. As we are interested in calculating the number or tubestations intersecting with the path, the function st_intersects() is preferred. This return a matrix of 0 and 1. 1 if there is an intersection and 0 if there is no intersection. As these are value (1), it is then easy to sum and find the total tubestions along the path.  
+```{r}
+intersect_tube_hunt <- st_intersects(tubestations_buff_100m, huntSF)
+```
+To use the colSums(), to find the total number of tubestations along the path, the return matrix must be converted into a dataframe. 
+Then, colSums is used, and give the results of 24. 
+```{r}
+intersection_df <- data.frame(intersect_tube_hunt)
+colSums(intersection_df)
+```
+Question 3: How many points did you score based on treasure hunt locations they managed to get within 300 metres of? 
+
+First the huntaddresses are upload in R. These are written in a .csv file. The csv file contains the geographic information for each huntadresses (there are columns in the csv file for the latitude and longitude coordinate). R will not recognize it, when the csv file is uploaded, therefore it is necessary to specificy which columns have the coordinate information and set them to create a spatial object. Here the function coordinates() can be used. 
+```{r}
+huntaddresses <- read.csv("data/huntaddresses.csv")
+coordinates(huntaddresses) <- c("lon","lat")
+```
+Interestingly, the coordinate for the hung in King's Cross Platform 9-3/4 is set somewhere in California. There are two possiblities to edit this coordinate and set it correctly. 
+```{r}
+huntaddresses <- edit(huntaddresses)
+# write_csv(huntaddresses,"huntaddresses.csv")
+```
+For futher analysis, do the three essential steps! 
+```{r}
+# Define the projection, transform to sf and set the CRS to BNG. 
+proj4string(huntaddresses) <- WGS84
+huntaddressesSF <- st_as_sf(huntaddresses)
+huntaddressesSF_BNG <- st_transform(huntaddressesSF, BNG)
+```
+Let's have a look at where the hunt are located!
+```{r}
+tmap_mode("view")
+tm_shape(hunt) +
+  tm_lines(col = "green", lwd = 4)+
+tm_shape(huntaddressesSF_BNG)+
+  tm_dots(col = "blue")
+```
+As for question two, we are interested to find the huntaddresses that fall within a distance of 300m from the path. Once again, a buffer is drawn around the huntaddresses and the huntaddresses that intersect with the path are returned with value 1. 
+```{r}
+huntaddresses_buff_300m <- st_buffer(huntaddressesSF_BNG, dist = 300)
+intersect_hunt_path <- st_intersects(huntaddresses_buff_300m, huntSF)
+```
+Here, it is not possible to simply calculate the sum of the 1 to find the score, as each huntaddresses has different values. The results of st_intersects() is stored in a dataframe. The dataframe has two columns, one with the id. for each huntaddresses, the other with the value 1. Here we are interested in the first column (the one with .id). As each huntaddresses have a different id, it is possible to select only the huntaddresses id in our first dataframe (huntaddressesSF_BNG) that correspond to the id of our intersection. 
+After the following steps, we can use again the colSums to sum all the points values for the huntaddresses intersecting with the path. The result for the team is 60. 
+```{r}
+# Create a list of the huntaddresses id.
+row_intersection <- intersection_hunt_path_df[,1]
+# Selection only the huntaddresses id with the amount of points that intersect the path. 
+huntaddresses_intersection <- huntaddressesSF_BNG[row_intersection,2]
+# Calculate the sum of the points!
+# Set the column point as numeric. 
+huntaddresses_intersection[,1] <- as.numeric(huntaddresses_intersection[,1])
+# Remove the geometry!
+st_geometry(huntaddresses_intersection) <- NULL
+# Finally sum all the points!
+colSums(huntaddresses_intersection)
+# Other possibility of summing the points! -> sum(huntaddresses_intersection$Points)
+```
+Question 4: Which wards did you pass through that had the (a) lowest and (b) the highest reates of Male Life Expectancy?
+
+Here the are some tricky steps! The LondonWards shapefile contains all the wards of London (city of London is not merged!). However, the data for male life expectancy is only available for the city of London. We need therefore to merge all the wards of city of London together to be able to combine the LondonWards with the data. 
+
+```{r}
+# Open the LondonWardsBoundaries
+LondonWards <- readOGR("LondonWardsBoundaries/LondonWardsNew.shp", layer="LondonWardsNew")
+# Change the sp object back to the sf object. 
+LondonWardsSF <- st_as_sf(LondonWards)
+city <- LondonWardsSF[1:25,]
+citycombined <- st_union(city)
+class(citycombined)
+# convert to sf object to merge it with the other sf!
+citycombined <- st_sf(citycombined)
+citycombined <- cbind(citycombined, LondonWardsSF[1,c(1:7)])
+#remove the extra geometry
+citycombined <- citycombined[,-c(9)]
+# rename the generated geometry of citycombined to geometry
+names(citycombined)[8] <- "geometry"
+st_geometry(citycombined) <- "geometry"
+# rename the names in the citycombined
+citycombined$WD11CD <-"E09000001"
+citycombined$WD11CDO <- "00AA"
+citycombined$WD11NM <- "CityofLondon"
+# Add the citycombined to LondonWardsSF -> (rbind -> add a new row to all the columns, if the columns are matching!)
+LondonWardsSF_city <- rbind(citycombined,LondonWardsSF)
+View(LondonWardsSF_city)
+# Delete the rows of city of london wards and the columns that are unnecessary!
+LondonWardsSF_city <- LondonWardsSF_city[-c(2:26),-c(5:7)]
+# Check if the city of London has been merged and correctly added to the LondonWards!
+qtm(LondonWardsSF_city)
+# Check the coordinate system of the object!
+st_crs(LondonWardsSF_city)
+# Need to set the coordinate back to BNG! 
+LondonWardsSF_city <- st_transform(LondonWardsSF_city, WGS84)
+LondonWardsSF_city <- st_transform(LondonWardsSF_city, BNG)
+```
+Ok, once this is done. We can join the LondonData with male expectancy with the LondonWardsSF_city. 
+First, we should open the LondonData and look at the names of the column. 
+```{r}
+LondonData <- read.csv("data/LondonData.csv")
+names(LondonData)
+```
+As we are interested only in the malelifeexpectancy column and the new code column, we will selection only the two columns from the LondonData. The new code column is the column with the values that can be matched with the LondonWards dataframe column. The column new code is rename to "WD11CD", the name of the column to be matched in LondonWards dataframe. 
+To join both dataframe, the function merge() is used. 
+```{r}
+LondonData_malelifeexpectancy <- LondonData[,c(3,19)]
+names(LondonData_malelifeexpectancy)[1] <- "WD11CD"
+LondonWardsSF_city_maledata <- merge(LondonWardsSF_city,LondonData_malelifeexpectancy, by=c("WD11CD"), all=TRUE)
+# remove unecessary rows.
+LondonWardsSF_city_maledata <- LondonWardsSF_city_maledata[-c(626:658),]
+```
+Ok, now that are both dataframe are merged, we know the male life expectancy for each wards. We are almost done! We only need to find the wards that the team has been through, the wards that intersect with the hunt path and then to calculate the min/max value that is found in these wards!
+As previously, let's start by finding the intersection of the wards, to store them in a dataframe and to extract the matching wards in a new dataframe. 
+```{r}
+wards_hunt_intersect <- st_intersects(LondonWardsSF_city_maledata, huntSF)
+# Create a dataframe with the huntwards that intersect the path. 
+intersection_wards_hunt_df <- data.frame(wards_hunt_intersect)
+# Create a list of the wards the path is going through (wards id).
+wards_intersection <- intersection_wards_hunt_df[,1]
+# Selection only the wards with the male expectancy that intersect the path. 
+wardshunt_intersection <- LondonWardsSF_city_maledata[wards_intersection,]
+View(wardshunt_intersection)
+```
+Now, calculate the max and min. Here the function max()/min() can be used. And the name of the wards with the max and min values is returned. The maximum is found in "City Of London", while the minimum is found in "Weavers".
+```{r}
+max_male_wards <- wardshunt_intersection[wardshunt_intersection$Malelifeexpectancy200913 == max(wardshunt_intersection$Malelifeexpectancy200913),]
+max_male_wards$WD11NM
+min_male_wards <- wardshunt_intersection[wardshunt_intersection$Malelifeexpectancy200913 == min(wardshunt_intersection$Malelifeexpectancy200913),]
+min_male_wards$WD11NM
+```
+Question 5: Taking the average of all Wards that you passed through, what was the average life expectancy at birth for babies born in those wards along the whole route? This can be both Male and Female life expectancies.
+
+For this question, we need to download the data from the London opendata store. Then the same steps as for the male life expectancy are executed. The column with the female life expectancy at birth for the year 2010/2014 and the ward code column are extracted and merged to the LondonWards dataframe. 
+```{r}
+# Open the datafile with life expectancy at birth each wards. 
+Lifeexpectancy <- read.csv("data/life-expectancy-ward-at-Birth.csv")
+View(Lifeexpectancy)
+
+# Select only the columns with the name of the ward code and the female life expectancy at birth for the year 2010/2014.
+Lifeexpectancy_female <- Lifeexpectancy[,c(1,75)]
+# Join the Lifeexpectancy female with the LondonWardsSF_city!
+names(Lifeexpectancy_female)[1] <- "WD11CD"
+LondonWardsSF_city_female <- merge(LondonWardsSF_city,Lifeexpectancy_female, by=c("WD11CD"), all=TRUE)
+# Selection only the wards with the female life expectancy at birth that intersect the path. 
+wardshunt_intersection_female <- LondonWardsSF_city_female[wards_intersection,]
+View(wardshunt_intersection_female)
+```
+Now, that we have all the wards that intersect the path, we can calculate the average by using the funciton mean(). The result for the average is 84.37667!
+```{r}
+mean(wardshunt_intersection_female$X2010.14.Female.Life.expectancy.at.birth)
+```
+Question 6: Is there any spatial patterns for CASA Treasure Hunt locations? Or are they randonly distributed? Point pattern analysis!
+
+As we are interested in doing some spatial analysis, we need to work with two further libraries. spdep package is useful ot perform spatial statistics test such as Moran's I, Gearys C and Getis Ord G! GISTools package is useful to calculate the number of points inside polygons and do spatial data manipulation!
+```{r}
+library(spdep)
+library(GISTools)
+```
+First let's have a look at how the hunt addresses are distributed in London! Can we spot out any spatial autocorrelation?
+```{r}
+tmap_mode("view")
+tm_shape(LondonWardsSF_city) +
+  tm_polygons(col = NA, alpha = 0.5)+
+  tm_shape(huntaddressesSF)+
+  tm_dots(col = "blue", size=0.04)
+```
+Let's start with a density analysis for all London!
+First we need to combine all the London Wards together!
+```{r}
+Londoncombined <- st_union(LondonWardsSF_city)
+Londoncombined <- st_sf(Londoncombined)
+```
